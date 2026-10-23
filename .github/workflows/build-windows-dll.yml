@@ -54,8 +54,10 @@ jobs:
         shell: bash
         run: |
           n="workbuddy_${{ steps.ver.outputs.version }}_windows_amd64.zip"
-          # zip root must be workbuddy.dll (matches pluginstore ArchiveName())
-          powershell -NoProfile -Command "Compress-Archive -Path workbuddy.dll -DestinationPath ../$n -Force"
+          # Build the zip in the current dir (working-directory: workbuddy) so
+          # the upload path below resolves; zip root is workbuddy.dll.
+          powershell -NoProfile -Command "Compress-Archive -Path workbuddy.dll -DestinationPath $n -Force"
+          ls -l "$n"
           echo "asset=$n" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
