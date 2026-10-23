@@ -1,0 +1,66 @@
+# Build the Windows c-shared plugin DLL from a work branch.
+#
+# Upstream build.yml only fires on main/dev/tags, so a fix branch never gets a
+# compiled artifact. This workflow exists so a fix branch can be built on
+# demand (workflow_dispatch) without publishing a release.
+name: Build Windows DLL
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for the asset (empty = workbuddy/VERSION)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build windows/amd64
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: workbuddy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: workbuddy/go.mod
+          cache-dependency-path: workbuddy/go.sum
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          v="${{ github.event.inputs.version }}"
+          if [ -z "$v" ]; then v=$(cat VERSION | tr -d '[:space:]'); fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build DLL
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -buildmode=c-shared -o workbuddy.dll .
+          ls -l workbuddy.dll
+
+      - name: Package
+        id: pkg
+        shell: bash
+        run: |
+          n="workbuddy_${{ steps.ver.outputs.version }}_windows_amd64.zip"
+          # zip root must be workbuddy.dll (matches pluginstore ArchiveName())
+          powershell -NoProfile -Command "Compress-Archive -Path workbuddy.dll -DestinationPath ../$n -Force"
+          echo "asset=$n" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbuddy-windows-amd64
+          path: workbuddy/${{ steps.pkg.outputs.asset }}
+          if-no-files-found: error
