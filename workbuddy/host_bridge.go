@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,14 +28,54 @@ import (
 // host.http.* RPC). All production upstream calls should route via hostHTTPDo
 // / hostHTTPDoStream so request-log captures them and host transport policy
 // applies. Direct use of this client in new code is a compliance bug.
+// upstreamTimeoutEnv names the environment variable that overrides the
+// fallback client's total request budget. Windows always uses this client
+// (see the GOOS short-circuit below), so this is the only knob that bounds a
+// long upstream generation on that platform. Values: a Go duration
+// ("600s", "10m") or bare seconds ("600"); "0" disables the timeout.
+const upstreamTimeoutEnv = "WB_UPSTREAM_TIMEOUT"
+
+// defaultUpstreamTimeout is the compiled-in total budget for one upstream
+// request (connect + write + full body read). It was 120s, which truncated
+// long outputs: a model generating ~10k tokens at ~67 tok/s needs ~150s, and
+// a DSH turn that adds context or tool calls pushed past it, surfacing as
+// "http_error: context deadline exceeded (Client.Timeout ... while reading
+// body)". Raised to 600s so a full long answer completes instead of failing.
+const defaultUpstreamTimeout = 600 * time.Second
+
+// upstreamTimeout resolves the budget at first use: WB_UPSTREAM_TIMEOUT when
+// it parses, otherwise defaultUpstreamTimeout. Malformed values fall back to
+// the default rather than failing open or closed.
+func upstreamTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(upstreamTimeoutEnv))
+	if raw == "" {
+		return defaultUpstreamTimeout
+	}
+	if d, err := time.ParseDuration(raw); err == nil {
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	// Bare seconds, e.g. "600".
+	if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+		return time.Duration(n) * time.Second
+	}
+	return defaultUpstreamTimeout
+}
+
 func sharedHTTPClient() *http.Client {
 	httpClientOnce.Do(func() {
 		// No cookie jar here: auth is carried by Bearer headers, and a shared
 		// jar would leak upstream set-cookie state across accounts (multi-account
 		// deployments could cross-contaminate sessions). Only the short-lived
 		// login clients get a jar.
+		timeout := upstreamTimeout()
+		if strings.TrimSpace(os.Getenv(upstreamTimeoutEnv)) != "" {
+			fmt.Fprintf(os.Stderr, "[workbuddy] upstream http timeout = %s (from %s)\n", timeout, upstreamTimeoutEnv)
+		}
 		sharedClient = &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: timeout,
 			Transport: &http.Transport{
 				MaxIdleConns:        20,
 				IdleConnTimeout:     90 * time.Second,

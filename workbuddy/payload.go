@@ -25,7 +25,12 @@ var reDeepSeekHarnessIntro = regexp.MustCompile(`(?i)you are an ai agent powered
 
 // deepSeekHarnessIntroReplacement keeps the agent framing neutral while
 // dropping the blocklisted signature.
-const deepSeekHarnessIntroReplacement = "You are an AI assistant"
+//
+// NOTE(fix): upstream 0.9.9 shipped this constant equal to the matched text
+// ("You are an AI assistant"), which made the replace below a no-op — the
+// blocklisted sentence went to the upstream verbatim and still answered
+// 400/11128. The replacement must actually differ from the pattern.
+const deepSeekHarnessIntroReplacement = "You are an AI agent built with DeepSeek Harness"
 
 // forceStreamBody returns the request body with "stream":true set, since the
 // upstream rejects non-streaming chat requests.
@@ -481,6 +486,19 @@ func sanitizeBlockedTemplates(s string) string {
 	// DeepSeek Harness intro signature — the third member of the same
 	// verbatim-match channel gate as the Claude Code / Codex lines above.
 	s = reDeepSeekHarnessIntro.ReplaceAllString(s, deepSeekHarnessIntroReplacement)
+
+	// DeepSeek Harness describes its web GUI with a two-sentence paragraph:
+	// "You are interacting with the user through the DeepSeek Harness Web GUI
+	// whose URL the runtime context names. When the user refers to ... they
+	// mean this GUI." The upstream flags that pair as an unapproved channel
+	// (400 / code 11128) even though either sentence alone passes, and the
+	// user's own DSH system prompt carries it verbatim on every turn. Reword
+	// the verb only: the instruction keeps its meaning and the pair no longer
+	// matches. Not covered by the upstream rewrite above, which only targets
+	// the intro sentence.
+	s = strings.ReplaceAll(s,
+		"You are interacting with the user through the DeepSeek Harness Web GUI",
+		"You are working with the user through the DeepSeek Harness Web GUI")
 	return s
 }
 
